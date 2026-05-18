@@ -67,7 +67,7 @@ def add_wallet_to_etherdrops(address, label="Dev Wallet"):
                     "address": address,
                     "direction": "All",
                     "events": ["TokenTransfer"],
-                    "includedContracts": [],
+                    "includedContracts": ["6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
                     "excludedContracts": [],
                     "networks": ["SOL"],
                     "label": label
