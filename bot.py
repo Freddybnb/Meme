@@ -49,8 +49,12 @@ def save_tracked(data):
 def load_okx_wallets():
     if os.path.exists(OKX_WALLETS_FILE):
         with open(OKX_WALLETS_FILE) as f:
-            return json.load(f)
-    return [DEFAULT_OKX_WALLET]
+            data = json.load(f)
+            # Migration: si c'est encore une liste, convertit en dict
+            if isinstance(data, list):
+                return {addr: SOL_THRESHOLD for addr in data}
+            return data
+    return {DEFAULT_OKX_WALLET: SOL_THRESHOLD}
 
 def save_okx_wallets(data):
     with open(OKX_WALLETS_FILE, "w") as f:
@@ -91,20 +95,20 @@ def init_bot():
             timeout=10
         ).json()
         existing = [w.get("address","") for w in resp.get("result", {}).get("wallets", [])]
-        for w in okx_wallets:
-            if w not in existing:
-                add_wallet_to_etherdrops(w, label="OKX Watch Wallet")
-                print(f"[BOT] Wallet OKX ajouté: {w}")
+        for addr in okx_wallets.keys():
+            if addr not in existing:
+                add_wallet_to_etherdrops(addr, label="OKX Watch Wallet")
+                print(f"[BOT] Wallet OKX ajouté: {addr}")
     except Exception as e:
         print(f"[BOT INIT ERROR] {e}")
 
     send_telegram(
         f"✅ <b>Bot démarré</b>\n\n"
         f"👁 <b>{len(okx_wallets)}</b> wallet(s) OKX surveillé(s)\n"
-        f"📡 Seuil : {SOL_THRESHOLD} SOL\n"
+        f"📡 Seuil par défaut : {SOL_THRESHOLD} SOL\n"
         f"⚡ En attente d'événements...\n\n"
         f"📌 Commandes :\n"
-        f"/addwallet adresse — ajouter un wallet OKX\n"
+        f"/addwallet adresse [seuil] — ajouter un wallet\n"
         f"/listwallets — voir les wallets surveillés\n"
         f"/removewallet adresse — supprimer un wallet"
     )
@@ -128,10 +132,12 @@ def telegram_update():
     if text.startswith("/addwallet"):
         parts = text.split()
         if len(parts) < 2:
-            send_telegram("❌ Usage : /addwallet <adresse_solana>", chat_id)
+            send_telegram("❌ Usage : /addwallet <adresse> [seuil_SOL]\nEx: /addwallet ABC123... 100", chat_id)
             return jsonify({"ok": True})
 
         address = parts[1].strip()
+        threshold = float(parts[2]) if len(parts) >= 3 else SOL_THRESHOLD
+
         if len(address) < 32:
             send_telegram("❌ Adresse invalide.", chat_id)
             return jsonify({"ok": True})
@@ -144,11 +150,12 @@ def telegram_update():
         # Ajoute dans EtherDrops
         result = add_wallet_to_etherdrops(address, label="OKX Watch Wallet")
         if result.get("success") or result.get("result"):
-            okx_wallets.append(address)
+            okx_wallets[address] = threshold
             save_okx_wallets(okx_wallets)
             send_telegram(
                 f"✅ <b>Wallet ajouté !</b>\n\n"
                 f"<code>{address}</code>\n"
+                f"💰 Seuil : <b>{threshold} SOL</b>\n"
                 f"👁 Total surveillés : <b>{len(okx_wallets)}</b>",
                 chat_id
             )
@@ -168,7 +175,7 @@ def telegram_update():
             send_telegram("⚠️ Wallet pas dans la liste.", chat_id)
             return jsonify({"ok": True})
 
-        okx_wallets.remove(address)
+        del okx_wallets[address]
         save_okx_wallets(okx_wallets)
         send_telegram(
             f"🗑 <b>Wallet supprimé</b>\n<code>{address}</code>\n"
@@ -182,9 +189,9 @@ def telegram_update():
         if not okx_wallets:
             send_telegram("📭 Aucun wallet surveillé.", chat_id)
         else:
-            lines = [f"👁 <b>{len(okx_wallets)} wallet(s) OKX surveillé(s) :</b>\n"]
-            for w in okx_wallets:
-                lines.append(f"• <code>{w}</code>")
+            lines = [f"👁 <b>{len(okx_wallets)} wallet(s) surveillé(s) :</b>\n"]
+            for addr, threshold in okx_wallets.items():
+                lines.append(f"• <code>{addr[:20]}...</code> — <b>{threshold} SOL</b>")
             lines.append(f"\n🎯 <b>{len(tracked)} wallet(s) dev</b> en attente de token")
             send_telegram("\n".join(lines), chat_id)
 
@@ -230,8 +237,9 @@ def webhook():
 
             print(f"[EVENT] {from_addr[:16]}... -> {to_addr[:16]}... | {sol_amount:.3f} SOL")
 
-            # PATTERN 1 : OKX envoie >= 50 SOL vers nouveau wallet
-            if from_addr in okx_wallets and to_addr and to_addr not in tracked and sol_amount >= SOL_THRESHOLD:
+            # PATTERN 1 : OKX envoie >= seuil SOL vers nouveau wallet
+            wallet_threshold = okx_wallets.get(from_addr, SOL_THRESHOLD)
+            if from_addr in okx_wallets and to_addr and to_addr not in tracked and sol_amount >= wallet_threshold:
                 print(f"[NEW DEV] {to_addr} ({sol_amount:.1f} SOL)")
                 result = add_wallet_to_etherdrops(to_addr, label=f"Dev-{to_addr[:8]}")
                 wallet_id = None
